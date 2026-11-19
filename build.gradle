@@ -1,80 +1,158 @@
 plugins {
-    id 'java-library'
-    id 'idea'
-    id 'net.neoforged.moddev' version '2.0.75'
+    id 'dev.architectury.loom' version '1.11.458' apply false
 }
 
-version = "${mod_version}+${minecraft_version}-neoforge"
-group = mod_group_id
+// Every target is an Architectury Loom project; `loom.platform` in targets/<name>/gradle.properties
+// picks Fabric, Forge or NeoForge. All targets use official Mojang mappings, so the shared code
+// is written once against Mojang names.
+subprojects {
+    apply plugin: 'java'
+    apply plugin: 'dev.architectury.loom'
 
-base {
-    archivesName = mod_id
-}
+    def mc = project.property('minecraft_version') as String
+    def loader = project.property('loader') as String
+    def target = "${loader}-${mc}"
+    def javaRelease = project.property('java_release') as int
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+    group = mod_group_id
+    version = "${mod_version}+${mc}-${loader}"
+    base { archivesName = mod_id }
 
-neoForge {
-    version = project.neoforge_version
+    java {
+        toolchain.languageVersion = JavaLanguageVersion.of(21)
+        sourceCompatibility = JavaVersion.toVersion(javaRelease)
+        targetCompatibility = JavaVersion.toVersion(javaRelease)
+    }
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+        options.release = javaRelease
+    }
 
-    runs {
-        client {
-            client()
-            programArguments.addAll '--username', "Dev${new Random().nextInt(1000)}"
+    sourceSets {
+        main {
+            java.srcDirs = [
+                    rootProject.file('src/common/java'),
+                    rootProject.file("src/mc-${mc}/java"),
+                    rootProject.file("src/${target}/java")
+            ]
+            resources.srcDirs = [
+                    rootProject.file('src/common/resources'),
+                    rootProject.file("src/${target}/resources")
+            ]
         }
-        server {
-            server()
-            programArgument '--nogui'
+    }
+
+    loom {
+        silentMojangMappingsLicense()
+        if (loader == 'fabric') {
+            mixin {
+                defaultRefmapName = 'cadaver.refmap.json'
+            }
         }
     }
 
-    mods {
-        "${mod_id}" {
-            sourceSet(sourceSets.main)
+    repositories {
+        mavenCentral()
+        maven { name = 'NeoForged'; url = 'https://maven.neoforged.net/releases/' }
+        maven { name = 'MinecraftForge'; url = 'https://maven.minecraftforge.net/' }
+        maven { name = 'Curios'; url = 'https://maven.theillusivec4.top/' }
+        maven { name = 'TerraformersMC (Trinkets)'; url = 'https://maven.terraformersmc.com/releases/' }
+    }
+
+    dependencies {
+        minecraft "com.mojang:minecraft:${mc}"
+        mappings loom.officialMojangMappings()
+
+        if (loader == 'neoforge') {
+            neoForge "net.neoforged:neoforge:${project.neoforge_version}"
+            // optional at runtime: only touched through compat.AccessoryCompat when Curios is installed
+            modCompileOnly "top.theillusivec4.curios:curios-neoforge:${project.curios_version}"
+        } else if (loader == 'forge') {
+            forge "net.minecraftforge:forge:${project.forge_version}"
+            modCompileOnly "top.theillusivec4.curios:curios-forge:${project.curios_version}"
+        } else {
+            modImplementation "net.fabricmc:fabric-loader:${project.fabric_loader_version}"
+            modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+            // Trinkets is reached by reflection (compat.Accessories), so it is not a compile dependency
         }
     }
-}
 
-repositories {
-    mavenCentral()
-    maven {
-        name = 'Curios'
-        url = 'https://maven.theillusivec4.top/'
+    processResources {
+        def props = [
+                mod_id                 : mod_id,
+                mod_name               : mod_name,
+                mod_license            : mod_license,
+                mod_version            : mod_version,
+                mod_authors            : mod_authors,
+                mod_description        : mod_description,
+                mod_homepage           : mod_homepage,
+                mod_sources            : mod_sources,
+                update_json_url        : update_json_url,
+                minecraft_version      : mc,
+                pack_format            : project.property('pack_format'),
+                minecraft_version_range: project.findProperty('minecraft_version_range') ?: '',
+                fabric_minecraft_range : project.findProperty('fabric_minecraft_range') ?: '',
+                fabric_loader_version  : project.findProperty('fabric_loader_version') ?: '',
+                neoforge_version_range : project.findProperty('neoforge_version_range') ?: '',
+                forge_version_range    : project.findProperty('forge_version_range') ?: '',
+                loader_version_range   : project.findProperty('loader_version_range') ?: '',
+                java_release           : javaRelease,
+        ]
+        inputs.properties props
+        filesMatching(['META-INF/neoforge.mods.toml', 'META-INF/mods.toml', 'fabric.mod.json', 'pack.mcmeta']) {
+            expand props
+        }
     }
-}
 
-dependencies {
-    // optional at runtime: only touched through compat.CuriosCompat when Curios is installed
-    compileOnly "top.theillusivec4.curios:curios-neoforge:9.5.1+1.21.1"
-}
-
-tasks.named('processResources', ProcessResources).configure {
-    var replaceProperties = [
-            minecraft_version      : minecraft_version,
-            minecraft_version_range: minecraft_version_range,
-            neoforge_version       : neoforge_version,
-            neoforge_version_range : neoforge_version_range,
-            loader_version_range   : loader_version_range,
-            mod_id                 : mod_id,
-            mod_name               : mod_name,
-            mod_license            : mod_license,
-            mod_version            : mod_version,
-            mod_authors            : mod_authors,
-            mod_description        : mod_description
-    ]
-    inputs.properties replaceProperties
-
-    filesMatching(['META-INF/neoforge.mods.toml', 'pack.mcmeta']) {
-        expand replaceProperties
+    // ship the license inside the jar
+    tasks.named('jar', Jar) {
+        archiveClassifier = 'dev'
+        from(rootProject.file('LICENSE')) {
+            rename { "LICENSE_${mod_id}" }
+        }
     }
-}
 
-// ship the license inside the jar
-tasks.named('jar', Jar).configure {
-    from('LICENSE') {
-        rename { "LICENSE_${mod_id}" }
+    // remapJar writes the release jar to build/remapped; `releaseJar` puts it into build/libs.
+    // A local Gradle init script copies the output of every `Jar`-type task (Loom's remapJar is not
+    // one) into the developer's test instance. So only `local_copy_target` gets a Jar-type
+    // releaseJar (an identical repack, picked up by that script); the other targets use a plain
+    // Copy, so a full build doesn't fill the test instance with jars for other loaders.
+    def remapJar = tasks.named('remapJar') {
+        destinationDirectory = layout.buildDirectory.dir('remapped')
     }
+    def remapped = remapJar.flatMap { it.archiveFile }
+    def releaseJar
+    if (target == project.property('local_copy_target')) {
+        releaseJar = tasks.register('releaseJar', Jar) {
+            dependsOn remapJar
+            from({ zipTree(remapped.get().asFile) }) {
+                exclude 'META-INF/MANIFEST.MF'
+            }
+            manifest {
+                from({ zipTree(remapped.get().asFile).matching { include 'META-INF/MANIFEST.MF' }.singleFile })
+            }
+            archiveFileName = remapped.map { it.asFile.name }
+            destinationDirectory = layout.buildDirectory.dir('libs')
+        }
+    } else {
+        releaseJar = tasks.register('releaseJar', Copy) {
+            from(remapped)
+            into(layout.buildDirectory.dir('libs'))
+        }
+    }
+    tasks.named('assemble') { dependsOn releaseJar }
 }
 
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
+// `gradlew buildAll` builds every target and gathers the release jars in build/libs/<version>/
+tasks.register('buildAll', Copy) {
+    group = 'build'
+    description = 'Builds all loader / Minecraft version targets and collects their jars.'
+    subprojects.each { p -> dependsOn("${p.path}:build") }
+    subprojects.each { p ->
+        from(p.layout.buildDirectory.dir('libs')) {
+            include "${mod_id}-${mod_version}+*.jar"
+            exclude '*-dev.jar', '*-dev-shadow.jar', '*-sources.jar'
+        }
+    }
+    into(layout.buildDirectory.dir("libs/${mod_version}"))
 }

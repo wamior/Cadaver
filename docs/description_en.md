@@ -65,7 +65,8 @@ File: `config/cadaver-common.toml`. Changes apply **without a restart**.
 ## 🔌 Compatibility
 
 - Required on **both client and server**
-- **Curios API**: optional, fully supported
+- **Minecraft 1.21.1** (NeoForge, Fabric) and **1.20.1** (Forge, Fabric)
+- **Curios API** (NeoForge / Forge) and **Trinkets** (Fabric): optional, fully supported
 - **TaCZ** and other gun mods: corpses never block shots
 - Works alongside mods that keep items on death; Cadaver only takes what would have dropped
 

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "${mod_id}",
+  "version": "${mod_version}",
+  "name": "${mod_name}",
+  "description": "${mod_description}",
+  "authors": ["${mod_authors}"],
+  "contact": {
+    "homepage": "${mod_homepage}",
+    "sources": "${mod_sources}",
+    "issues": "${mod_sources}/issues"
+  },
+  "license": "${mod_license}",
+  "icon": "cadaver.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["ru.wamior.cadaver.fabric.CadaverFabric"],
+    "client": ["ru.wamior.cadaver.fabric.CadaverFabricClient"]
+  },
+  "mixins": ["cadaver.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "fabric-api": "*",
+    "minecraft": "${fabric_minecraft_range}",
+    "java": ">=${java_release}"
+  },
+  "suggests": {
+    "trinkets": "*"
+  },
+  "custom": {
+    "cadaver:update_json": "${update_json_url}"
+  }
+}

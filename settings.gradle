@@ -1,10 +1,10 @@
 pluginManagement {
     repositories {
+        maven { url = 'https://maven.architectury.dev/' }
+        maven { url = 'https://maven.fabricmc.net/' }
+        maven { url = 'https://maven.minecraftforge.net/' }
+        maven { url = 'https://maven.neoforged.net/releases' }
         gradlePluginPortal()
-        maven {
-            name = 'NeoForged'
-            url = 'https://maven.neoforged.net/releases'
-        }
     }
 }
 
@@ -13,3 +13,14 @@ plugins {
 }
 
 rootProject.name = 'cadaver'
+
+// One Gradle project per published jar. Each one compiles
+//   src/common            shared by every target
+//   src/mc-<version>      Minecraft-version shims shared by all loaders of that version
+//   src/<loader>-<version> loader entry points, networking, events, Curios/Trinkets
+// The list of targets lives in gradle.properties (`targets`) so the README and CI read one place.
+def targets = providers.gradleProperty('targets').get().split(',')*.trim()
+targets.each { name ->
+    include name
+    project(":$name").projectDir = file("targets/$name")
+}

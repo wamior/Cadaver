@@ -18,8 +18,12 @@ Long description: `docs/description_en.md` (English) and `docs/description_ru.md
 - **Main category:** Utility & QoL
 - **Additional categories:** Server Utility, Adventure and RPG, Armor, Tools, and Weapons
 - **License:** All Rights Reserved
-- **Upload a file:** game version 1.21.1, loader NeoForge, Java 21, release type Release
-- **Relations:** Curios API → *Optional Dependency*
+- **Upload files** (one per jar from `build/libs/<version>/`, release type Release):
+  - `+1.21.1-neoforge.jar`: game version 1.21.1, loader NeoForge, Java 21
+  - `+1.21.1-fabric.jar`: game version 1.21.1 (and 1.21), loader Fabric, Java 21
+  - `+1.20.1-forge.jar`: game version 1.20.1, loader Forge, Java 17
+  - `+1.20.1-fabric.jar`: game version 1.20.1, loader Fabric, Java 17
+- **Relations:** Curios API → *Optional Dependency*, Trinkets → *Optional Dependency*, Fabric API → *Required Dependency* (Fabric files)
 
 ## Modrinth
 
@@ -27,10 +31,11 @@ Long description: `docs/description_en.md` (English) and `docs/description_ru.md
 - **Categories:** Utility, Game Mechanics (+ optional: Equipment)
 - **Environment:** Client required, Server required
 - **License:** "Custom license" → `LicenseRef-All-Rights-Reserved`, URL `https://github.com/wamior/Cadaver/blob/main/LICENSE`
-- **Version upload:** loaders NeoForge, game version 1.21.1, channel Release
-- **Dependencies:** Curios API → *optional*
+- **Version upload:** one version per jar, channel Release, version number = jar version (e.g. `1.0.0+1.20.1-forge`):
+  NeoForge 1.21.1 · Fabric 1.21.1 (+1.21) · Forge 1.20.1 · Fabric 1.20.1
+- **Dependencies:** Curios API → *optional* (NeoForge / Forge), Trinkets → *optional* and Fabric API → *required* (Fabric)
 
 ## Before publishing
 
 - Add 3-4 gallery screenshots: a corpse lying in the world, the loot screen with armor + Curios, quick loot result.
-- Make a GitHub release `v1.0.0` with the same jar, and bump `update.json` with every release (see README).
+- Make a GitHub release `v1.0.0` with the same four jars, and bump `update.json` with every release (see README).
