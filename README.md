@@ -24,7 +24,7 @@ When a player dies, their corpse stays where they fell, holding everything they 
 Config changes apply without a restart.
 
 ## Build
-`gradlew build` → `build/libs/`. Icon for CurseForge/Modrinth: `icon.png` (512×512). Store texts: `docs/listing.md`, `docs/description.md`.
+`gradlew build` → `build/libs/`. Icon for CurseForge/Modrinth: `icon.png` (512×512). Store texts: `docs/listing.md`, `docs/description_en.md`, `docs/description_ru.md`.
 
 ## Releasing a new version
 1. Bump `mod_version` in `gradle.properties` and build.

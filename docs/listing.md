@@ -1,6 +1,6 @@
 # Store listing fields
 
-The long description for both sites is `docs/description.md` (paste it as is; both CurseForge and Modrinth accept Markdown).
+Long description: `docs/description_en.md` (English) and `docs/description_ru.md` (Russian). Both sites accept Markdown; paste the English one as the main description (CurseForge: switch the editor to Markdown). Modrinth/CurseForge have no separate language field, so either append the Russian text below the English one or keep it for your own channels.
 
 ## Shared
 
