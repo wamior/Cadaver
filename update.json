@@ -1,0 +1,10 @@
+{
+  "homepage": "https://modrinth.com/mod/cadaver",
+  "promos": {
+    "1.21.1-latest": "1.0.0",
+    "1.21.1-recommended": "1.0.0"
+  },
+  "1.21.1": {
+    "1.0.0": "First release: corpses with sectioned loot screen, Curios support, no hitbox for bullets."
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "entity.cadaver.corpse": "Труп",
+  "container.cadaver.corpse": "Труп игрока %s",
+  "message.cadaver.location": "Ваш труп лежит на %s %s %s (%s)",
+  "message.cadaver.protected": "Обыскать труп может только %s ещё %s мин.",
+  "message.cadaver.inventory_full": "Не хватило места, часть предметов осталась в трупе",
+  "gui.cadaver.armor": "Броня",
+  "gui.cadaver.offhand": "Левая рука",
+  "gui.cadaver.inventory": "Инвентарь трупа",
+  "gui.cadaver.curios": "Аксессуары",
+  "gui.cadaver.other": "Прочее",
+  "message.cadaver.update": "Вышла новая версия Cadaver: %2$s (у вас %1$s). %3$s",
+  "message.cadaver.update.link": "Скачать"
+}
