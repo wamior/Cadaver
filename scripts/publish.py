@@ -163,6 +163,23 @@ class API:
             raise PublishError(f"{self.platform} {path}: network error or invalid JSON response.") from None
 
 
+def curseforge_tag_id(name, kind, catalog, types):
+    # The Minecraft endpoint includes Bukkit and addon tags with identical names.
+    # Only the Minecraft release-family type is valid for mod artifacts. In newer
+    # families the display name may omit "Minecraft", so use the stable type slug.
+    type_slug = "minecraft-" + "-".join(name.split(".")[:2]) if kind == "minecraft" else kind
+    type_ids = {int(t["id"]) for t in types if t["slug"].casefold() == type_slug}
+    if len(type_ids) != 1:
+        raise PublishError(f"CurseForge tag type '{type_slug}' is missing or ambiguous. No files uploaded.")
+    matches = {int(entry["id"]) for entry in catalog
+               if entry["name"].strip().casefold() == name.casefold()
+               and entry.get("gameVersionTypeID") is not None
+               and int(entry["gameVersionTypeID"]) in type_ids}
+    if len(matches) != 1:
+        raise PublishError(f"CurseForge tag '{type_slug}:{name}' is missing or ambiguous ({len(matches)} IDs). No files uploaded; use --targets to select supported targets.")
+    return matches.pop()
+
+
 def prepare(platform, config, items, changelog, release_type, api):
     project = str(config[platform]["project_id"])
     remote = []
@@ -178,14 +195,13 @@ def prepare(platform, config, items, changelog, release_type, api):
     jobs = [metadata(platform, item, project, changelog, release_type) for item in items]
     if platform == "curseforge":
         catalog = api.request("/game/versions")
-        for meta in jobs:
-            ids = []
-            for name in meta.pop("gameVersionNames"):
-                matches = {entry["id"] for entry in catalog if entry["name"].casefold() == name.casefold()}
-                if len(matches) != 1:
-                    raise PublishError(f"CurseForge tag '{name}' is missing or ambiguous. No files uploaded; use --targets to select supported targets.")
-                ids.append(matches.pop())
-            meta["gameVersions"] = ids
+        types = api.request("/game/version-types")
+        for item, meta in zip(items, jobs):
+            tags = [(name, "minecraft") for name in item["game_versions"]]
+            tags += [(LOADERS[item["loader"]], "modloader"), (f"Java {item['java']}", "java"),
+                     ("Client", "environment"), ("Server", "environment")]
+            meta.pop("gameVersionNames")
+            meta["gameVersions"] = [curseforge_tag_id(name, kind, catalog, types) for name, kind in tags]
     return project, jobs, remote
 
 

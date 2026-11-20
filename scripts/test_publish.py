@@ -26,6 +26,11 @@ class FakeAPI:
 
 
 class PublisherTests(unittest.TestCase):
+    CF_TYPES = [{"id": 1, "slug": "bukkit"}, {"id": 615, "slug": "addons"},
+                {"id": 75125, "slug": "minecraft-1-20"}, {"id": 77784, "slug": "minecraft-1-21"},
+                {"id": 68441, "slug": "modloader"}, {"id": 2, "slug": "java"},
+                {"id": 75208, "slug": "environment"}, {"id": 88556, "slug": "minecraft-26-3", "name": "26.3"}]
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -86,7 +91,8 @@ class PublisherTests(unittest.TestCase):
         self.assertFalse(self.state_path.exists())
 
     def test_missing_tag_prevents_any_post(self):
-        api = FakeAPI({"/game/versions": [{"id": 1, "name": "1.21"}]})
+        api = FakeAPI({"/game/versions": [{"id": 1, "name": "1.21", "gameVersionTypeID": 77784}],
+                       "/game/version-types": self.CF_TYPES})
         with self.assertRaisesRegex(p.PublishError, "missing or ambiguous"):
             p.prepare("curseforge", {"curseforge": {"project_id": 1816809}}, self.items, "Fixes", "release", api)
         self.assertTrue(all(body is None for _, body, _ in api.calls))
@@ -111,11 +117,44 @@ class PublisherTests(unittest.TestCase):
 
     def test_curseforge_resolves_exact_catalog_ids(self):
         names = ["1.21", "1.21.1", "Fabric", "Java 21", "Client", "Server"]
-        api = FakeAPI({"/game/versions": [{"id": i, "name": n} for i, n in enumerate(names, 100)]})
+        types = [77784, 77784, 68441, 2, 75208, 75208]
+        api = FakeAPI({"/game/versions": [{"id": i, "name": n, "gameVersionTypeID": t}
+                                        for i, (n, t) in enumerate(zip(names, types), 100)],
+                       "/game/version-types": self.CF_TYPES})
         project, jobs, remote = p.prepare("curseforge", {"curseforge": {"project_id": 1816809}}, self.items[:1], "Fixes", "release", api)
         self.assertEqual(project, "1816809")
         self.assertEqual(jobs[0]["gameVersions"], list(range(100, 106)))
         self.assertNotIn("gameVersionNames", jobs[0])
+
+    def test_curseforge_ignores_bukkit_and_addon_versions_with_same_name(self):
+        # Shape and IDs from the live CurseForge catalog; the original resolver
+        # failed because it matched all three rows by name without the type.
+        catalog = [{"id": 9994, "gameVersionTypeID": 1, "name": "1.20.1"},
+                   {"id": 9993, "gameVersionTypeID": 615, "name": "1.20.1"},
+                   {"id": 9990, "gameVersionTypeID": 75125, "name": "1.20.1"}]
+        self.assertEqual(p.curseforge_tag_id("1.20.1", "minecraft", catalog, self.CF_TYPES), 9990)
+
+    def test_curseforge_does_not_fall_back_to_bukkit_when_mod_tag_absent(self):
+        catalog = [{"id": 9994, "gameVersionTypeID": 1, "name": "1.20.1"}]
+        with self.assertRaisesRegex(p.PublishError, "minecraft-1-20:1.20.1"):
+            p.curseforge_tag_id("1.20.1", "minecraft", catalog, self.CF_TYPES)
+
+    def test_curseforge_new_version_family_uses_slug_not_display_name(self):
+        catalog = [{"id": 17045, "gameVersionTypeID": 88556, "name": "26.3"},
+                   {"id": 17046, "gameVersionTypeID": 1, "name": "26.3"}]
+        self.assertEqual(p.curseforge_tag_id("26.3", "minecraft", catalog, self.CF_TYPES), 17045)
+
+    def test_curseforge_auxiliary_tags_are_scoped_by_type(self):
+        for name, kind, type_id in [("Fabric", "modloader", 68441), ("Java 21", "java", 2), ("Client", "environment", 75208)]:
+            catalog = [{"id": 123, "gameVersionTypeID": 1, "name": name},
+                       {"id": 456, "gameVersionTypeID": type_id, "name": name}]
+            self.assertEqual(p.curseforge_tag_id(name, kind, catalog, self.CF_TYPES), 456)
+
+    def test_curseforge_rejects_multiple_ids_within_minecraft_type(self):
+        catalog = [{"id": 9990, "gameVersionTypeID": 75125, "name": "1.20.1"},
+                   {"id": 9991, "gameVersionTypeID": 75125, "name": "1.20.1"}]
+        with self.assertRaisesRegex(p.PublishError, "2 IDs"):
+            p.curseforge_tag_id("1.20.1", "minecraft", catalog, self.CF_TYPES)
 
     def test_multipart_preserves_jar_bytes_and_utf8_changelog(self):
         binary = b"PK\x00\xff\r\n"
