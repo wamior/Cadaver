@@ -37,6 +37,12 @@ class PublishError(Exception):
     pass
 
 
+class HTTPRejection(PublishError):
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
+
+
 def properties(path):
     result = {}
     for line in path.read_text(encoding="utf-8-sig").splitlines():
@@ -112,13 +118,15 @@ def metadata(platform, item, project, changelog, release_type):
             "dependencies": [{"project_id": DEPENDENCIES[d][1], "dependency_type": kind}
                              for d, kind in item["dependencies"]],
         }
-    return {
+    result = {
         "displayName": item["name"], "changelog": changelog,
         "changelogType": "markdown", "releaseType": release_type,
         "gameVersionNames": item["game_versions"] + [LOADERS[item["loader"]], f"Java {item['java']}", "Client", "Server"],
-        "relations": {"projects": [{"slug": DEPENDENCIES[d][0], "type": kind + "Dependency"}
-                                   for d, kind in item["dependencies"]]},
     }
+    if item["dependencies"]:
+        result["relations"] = {"projects": [{"slug": DEPENDENCIES[d][0], "type": kind + "Dependency"}
+                                           for d, kind in item["dependencies"]]}
+    return result
 
 
 def multipart(field, meta, filename, data):
@@ -146,6 +154,8 @@ class API:
         self.opener = urllib.request.build_opener(NoRedirect)
 
     def request(self, path, body=None, content_type=None):
+        if body is None:
+            print(f"  Checking {self.platform}: {path}", flush=True)
         headers = {"User-Agent": "wamior/Cadaver-publisher (https://github.com/wamior/Cadaver)",
                    "Accept": "application/json"}
         headers["X-Api-Token" if self.platform == "curseforge" else "Authorization"] = self.token
@@ -157,8 +167,21 @@ class API:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
             hint = " Check project ID and access (draft projects may require the owner's token)." if exc.code == 404 else ""
-            # Do not echo remote bodies or request headers: they can contain credentials.
-            raise PublishError(f"{self.platform} {path}: HTTP {exc.code}.{hint}") from None
+            # Only selected JSON error fields, with credentials redacted. Never
+            # log raw response bodies, HTML or request headers.
+            detail = ""
+            try:
+                payload = json.loads(exc.read(65536))
+                fields = {key: payload[key] for key in ("error", "description", "message", "errorMessage", "errorCode", "errors") if key in payload}
+                if fields:
+                    detail = " " + json.dumps(fields, ensure_ascii=False)
+                    for token in [self.token] + [os.environ.get(var) for var in TOKEN_VARS.values()]:
+                        if token:
+                            detail = detail.replace(token, "[redacted]")
+                    detail = detail[:1500]
+            except (ValueError, TypeError, OSError):
+                pass
+            raise HTTPRejection(f"{self.platform} {path}: HTTP {exc.code}.{hint}{detail}", exc.code) from None
         except (urllib.error.URLError, TimeoutError, OSError, ValueError):
             raise PublishError(f"{self.platform} {path}: network error or invalid JSON response.") from None
 
@@ -240,7 +263,7 @@ def upload(root, prepared, items, state, state_path, retry_uncertain=False):
             if remote_id or (record and record["status"] == "done"):
                 print(f"Skip {platform}: {item['filename']} (already uploaded)")
                 continue
-            if record and not retry_uncertain:
+            if record and record["status"] != "rejected" and not retry_uncertain:
                 raise PublishError(f"Uncertain previous upload: {key}. Check the site's Files page; only if absent, repeat with --retry-uncertain. Keep .publish/state.json.")
             work.append((platform, api, project, item, meta, key))
     for platform, api, project, item, meta, key in work:
@@ -252,7 +275,15 @@ def upload(root, prepared, items, state, state_path, retry_uncertain=False):
         write_json(state_path, state)
         print(f"Upload {platform}: {item['filename']}", flush=True)
         path = f"/projects/{project}/upload-file" if platform == "curseforge" else "/version"
-        response = api.request(path, body, content_type)
+        try:
+            response = api.request(path, body, content_type)
+        except HTTPRejection as exc:
+            # A rejected validation/auth/rate-limit request is different from a
+            # timeout or 5xx response whose upload outcome can be unknown.
+            if exc.status in (400, 401, 403, 404, 405, 409, 413, 415, 422, 429):
+                state[key].update(status="rejected", http_status=exc.status)
+                write_json(state_path, state)
+            raise
         if not response.get("id"):
             raise PublishError(f"{platform}: missing uploaded file ID; check the site before retrying.")
         state[key] = {"sha256": item["sha256"], "id": response["id"], "status": "done"}
@@ -300,7 +331,7 @@ def main(argv=None):
         for p in args.platforms}}
     plan_path = ROOT / "build" / f"publish-plan-{version}.json"
     write_json(plan_path, plan)
-    print(f"Plan: {plan_path} ({len(items)} jars, {', '.join(args.platforms)})")
+    print(f"Plan: {plan_path} ({len(items)} jars, {', '.join(args.platforms)})", flush=True)
     if not args.upload and not args.check:
         print("Offline preview only. Use --check to validate APIs or --upload to publish.")
         return
@@ -312,7 +343,7 @@ def main(argv=None):
         api = API(platform, os.environ[TOKEN_VARS[platform]])
         project, jobs, remote = prepare(platform, config, items, changelog, args.release_type, api)
         prepared.append((platform, api, project, jobs, remote))
-    print("API credentials and tags validated; Modrinth project resolved. CurseForge project upload permission is checked by its upload endpoint.")
+    print("API credentials and all selected platform tags validated.")
     if args.check:
         return
     state_path = ROOT / ".publish" / "state.json"

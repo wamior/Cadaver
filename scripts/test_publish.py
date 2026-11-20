@@ -1,9 +1,11 @@
 """Offline publishing regression tests. Run: python -m unittest discover -s scripts."""
 
 import json
+import io
 from pathlib import Path
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import patch
 import zipfile
 
@@ -73,6 +75,10 @@ class PublisherTests(unittest.TestCase):
         mr = p.metadata("modrinth", fabric, "project", "Fixes", "release")
         self.assertEqual(mr["dependencies"][1]["dependency_type"], "optional")
         self.assertEqual(mr["version_number"], "1.0.0+1.21.1-fabric")
+
+    def test_curseforge_omits_relations_when_there_are_no_dependencies(self):
+        meta = p.metadata("curseforge", self.items[2], 1816809, "Fixes", "release")
+        self.assertNotIn("relations", meta)
 
     def test_missing_or_stale_jar_rejected(self):
         self.target("fabric-1.21.1", "fabric", "1.21.1", version="0.9.0")
@@ -165,6 +171,19 @@ class PublisherTests(unittest.TestCase):
         boundary = content_type.split("boundary=")[1]
         self.assertTrue(body.endswith(f"--{boundary}--\r\n".encode()))
 
+    def test_http_error_reports_validation_message_and_redacts_tokens(self):
+        api = p.API("curseforge", "private-token")
+        body = json.dumps({"errorMessage": "Invalid relations; private-token other-secret"}).encode()
+        error = urllib.error.HTTPError("https://minecraft.curseforge.com/api/test", 400, "Bad Request", {}, io.BytesIO(body))
+        with patch.object(api.opener, "open", side_effect=error), patch.dict("os.environ", {"MODRINTH_TOKEN": "other-secret"}):
+            with self.assertRaises(p.HTTPRejection) as caught:
+                api.request("/test", b"body", "application/json")
+        message = str(caught.exception)
+        self.assertIn("Invalid relations", message)
+        self.assertNotIn("private-token", message)
+        self.assertNotIn("other-secret", message)
+        self.assertEqual(caught.exception.status, 400)
+
     def test_resume_skips_successful_uploads(self):
         api, state = FakeAPI(), {}
         prepared = [("curseforge", api, "1816809", [{"displayName": "test"}], [])]
@@ -182,6 +201,24 @@ class PublisherTests(unittest.TestCase):
         with self.assertRaisesRegex(p.PublishError, "Uncertain previous"):
             p.upload(self.root, prepared, self.items[:1], state, self.state_path)
         self.assertEqual(len(api.calls), 1)
+        self.assertEqual(next(iter(state.values()))["status"], "uncertain")
+
+    def test_explicit_http_rejection_can_be_retried(self):
+        api, state = FakeAPI(), {}
+        prepared = [("curseforge", api, "1816809", [{}], [])]
+        with patch.object(api, "request", side_effect=p.HTTPRejection("Validation failed", 400)):
+            with self.assertRaisesRegex(p.PublishError, "Validation failed"):
+                p.upload(self.root, prepared, self.items[:1], state, self.state_path)
+        self.assertEqual(next(iter(state.values()))["status"], "rejected")
+        p.upload(self.root, prepared, self.items[:1], state, self.state_path)
+        self.assertEqual(next(iter(state.values()))["status"], "done")
+
+    def test_http_5xx_remains_uncertain(self):
+        api, state = FakeAPI(), {}
+        prepared = [("curseforge", api, "1816809", [{}], [])]
+        with patch.object(api, "request", side_effect=p.HTTPRejection("Server error", 500)):
+            with self.assertRaises(p.PublishError):
+                p.upload(self.root, prepared, self.items[:1], state, self.state_path)
         self.assertEqual(next(iter(state.values()))["status"], "uncertain")
 
     def test_modrinth_reconciles_lost_response_from_remote_hash(self):
