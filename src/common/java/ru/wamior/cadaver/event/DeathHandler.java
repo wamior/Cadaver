@@ -10,6 +10,8 @@ import ru.wamior.cadaver.CadaverConfig;
 import ru.wamior.cadaver.compat.AccessoryCompat;
 import ru.wamior.cadaver.entity.CorpseEntity;
 import ru.wamior.cadaver.entity.CurioRef;
+import ru.wamior.cadaver.version.Mc;
+import ru.wamior.cadaver.version.Perms;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -86,7 +88,7 @@ public final class DeathHandler {
         Snapshot snap = SNAPSHOTS.remove(player.getUUID());
 
         if (!CadaverConfig.enabled() || drops.isEmpty()) return;
-        String dimension = player.level().dimension().location().toString();
+        String dimension = Perms.dimensionId(player.level());
         if (CadaverConfig.dimensionBlacklist().contains(dimension)) return;
 
         CorpseEntity corpse = CorpseEntity.create(player);
@@ -104,7 +106,7 @@ public final class DeathHandler {
         List<ItemStack> overflow = corpse.fillExtras(curios, others);
         drops.clear();
 
-        ServerLevel level = player.serverLevel();
+        ServerLevel level = Mc.serverLevel(player);
         if (!corpse.getInventory().isEmpty()) {
             level.addFreshEntity(corpse);
             if (CadaverConfig.sendCoordinates()) {

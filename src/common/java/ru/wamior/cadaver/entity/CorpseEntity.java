@@ -1,15 +1,12 @@
 package ru.wamior.cadaver.entity;
 
-import com.google.common.collect.Iterables;
 import com.mojang.authlib.properties.Property;
-import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Containers;
-import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MoverType;
@@ -20,11 +17,12 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import ru.wamior.cadaver.CadaverConfig;
 import ru.wamior.cadaver.platform.Platform;
+import ru.wamior.cadaver.version.Chat;
 import ru.wamior.cadaver.version.Mc;
+import ru.wamior.cadaver.version.Perms;
+import ru.wamior.cadaver.version.Profiles;
 
 import net.minecraft.core.NonNullList;
-import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.Tag;
 import ru.wamior.cadaver.compat.AccessoryCompat;
 
 import java.util.ArrayList;
@@ -44,8 +42,9 @@ import java.util.UUID;
 public abstract class CorpseEntity extends Entity {
     private static final long TICKS_PER_MINUTE = 1200L;
 
-    protected static final EntityDataAccessor<Optional<UUID>> OWNER_ID =
-            SynchedEntityData.defineId(CorpseEntity.class, EntityDataSerializers.OPTIONAL_UUID);
+    /** Owner UUID as a string ("" = none): the optional-UUID serializer does not exist on every version. */
+    protected static final EntityDataAccessor<String> OWNER_ID =
+            SynchedEntityData.defineId(CorpseEntity.class, EntityDataSerializers.STRING);
     protected static final EntityDataAccessor<String> OWNER_NAME =
             SynchedEntityData.defineId(CorpseEntity.class, EntityDataSerializers.STRING);
     protected static final EntityDataAccessor<String> SKIN_VALUE =
@@ -73,15 +72,15 @@ public abstract class CorpseEntity extends Entity {
         Level level = player.level();
         CorpseEntity corpse = new CorpseEntityImpl(Platform.corpseType(), level);
         double y = player.getY();
-        if (y < level.getMinBuildHeight()) {
+        if (y < Mc.minY(level)) {
             // died in the void: keep the corpse reachable at the bottom of the world
-            y = level.getMinBuildHeight() + 1;
+            y = Mc.minY(level) + 1;
             corpse.setNoGravity(true);
         }
-        corpse.moveTo(player.getX(), y, player.getZ(), player.getYRot(), 0.0F);
-        corpse.entityData.set(OWNER_ID, Optional.of(player.getUUID()));
-        corpse.entityData.set(OWNER_NAME, player.getGameProfile().getName());
-        Property textures = Iterables.getFirst(player.getGameProfile().getProperties().get("textures"), null);
+        Mc.moveTo(corpse, player.getX(), y, player.getZ(), player.getYRot(), 0.0F);
+        corpse.entityData.set(OWNER_ID, player.getUUID().toString());
+        corpse.entityData.set(OWNER_NAME, Profiles.name(player.getGameProfile()));
+        Property textures = Profiles.textures(player.getGameProfile());
         if (textures != null) {
             String signature = Mc.textureSignature(textures);
             corpse.entityData.set(SKIN_VALUE, Mc.textureValue(textures));
@@ -149,7 +148,13 @@ public abstract class CorpseEntity extends Entity {
     // ---------------------------------------------------------------- owner
 
     public Optional<UUID> getOwnerId() {
-        return entityData.get(OWNER_ID);
+        String id = entityData.get(OWNER_ID);
+        if (id.isEmpty()) return Optional.empty();
+        try {
+            return Optional.of(UUID.fromString(id));
+        } catch (IllegalArgumentException e) {
+            return Optional.empty();
+        }
     }
 
     public String getOwnerName() {
@@ -177,11 +182,11 @@ public abstract class CorpseEntity extends Entity {
 
     public void interact(ServerPlayer player, boolean quickLoot) {
         if (!isAlive()) return;
-        if (!isOwner(player) && !player.hasPermissions(2)) {
+        if (!isOwner(player) && !Perms.isOperator(player)) {
             long left = protectionTicksLeft();
             if (left > 0) {
                 long minutes = (left + TICKS_PER_MINUTE - 1) / TICKS_PER_MINUTE;
-                player.displayClientMessage(Component.translatable("message.cadaver.protected", getOwnerName(), minutes), true);
+                Chat.actionBar(player, Component.translatable("message.cadaver.protected", getOwnerName(), minutes));
                 return;
             }
         }
@@ -222,13 +227,13 @@ public abstract class CorpseEntity extends Entity {
         inventory.setChanged();
         player.containerMenu.broadcastChanges();
         if (!inventory.isEmpty()) {
-            player.displayClientMessage(Component.translatable("message.cadaver.inventory_full"), true);
+            Chat.actionBar(player, Component.translatable("message.cadaver.inventory_full"));
         }
         onContentsTaken();
     }
 
     public void onContentsTaken() {
-        if (!level().isClientSide && isAlive() && inventory.isEmpty() && CadaverConfig.removeWhenEmpty()) {
+        if (!level().isClientSide() && isAlive() && inventory.isEmpty() && CadaverConfig.removeWhenEmpty()) {
             discard();
         }
     }
@@ -239,8 +244,8 @@ public abstract class CorpseEntity extends Entity {
     public void tick() {
         super.tick();
 
-        if (getY() < level().getMinBuildHeight()) {
-            setPos(getX(), level().getMinBuildHeight() + 1, getZ());
+        if (getY() < Mc.minY(level())) {
+            setPos(getX(), Mc.minY(level()) + 1, getZ());
             setDeltaMovement(Vec3.ZERO);
             setNoGravity(true);
         }
@@ -257,7 +262,7 @@ public abstract class CorpseEntity extends Entity {
     /** Called by ServerLevel every tick for loaded entities. */
     @Override
     public void checkDespawn() {
-        if (level().isClientSide || tickCount % 20 != 0) return;
+        if (level().isClientSide() || tickCount % 20 != 0) return;
         int minutes = CadaverConfig.despawnMinutes();
         if (minutes > 0 && level().getGameTime() - deathGameTime >= minutes * TICKS_PER_MINUTE) {
             if (CadaverConfig.dropItemsOnDespawn()) {
@@ -305,17 +310,7 @@ public abstract class CorpseEntity extends Entity {
     }
 
     @Override
-    public boolean canBeCollidedWith() {
-        return false;
-    }
-
-    @Override
     public boolean isPushedByFluid() {
-        return false;
-    }
-
-    @Override
-    public boolean hurt(DamageSource source, float amount) {
         return false;
     }
 
@@ -326,60 +321,40 @@ public abstract class CorpseEntity extends Entity {
 
     // ---------------------------------------------------------------- data
 
-    @Override
-    protected void addAdditionalSaveData(CompoundTag tag) {
-        getOwnerId().ifPresent(id -> tag.putUUID("Owner", id));
-        tag.putString("OwnerName", getOwnerName());
-        tag.putString("SkinValue", getSkinValue());
-        tag.putString("SkinSignature", getSkinSignature());
-        tag.putLong("DeathTime", deathGameTime);
-        tag.putInt("Layout", CorpseLayout.VERSION);
-        tag.putInt("CurioCount", curioCount);
-        tag.putInt("OtherCount", otherCount);
-        ListTag refs = new ListTag();
-        for (int i = 0; i < curioCount; i++) {
-            if (curioRefs[i] != null) {
-                CompoundTag ref = curioRefs[i].save();
-                ref.putInt("Slot", i);
-                refs.add(ref);
-            }
-        }
-        tag.put("Curios", refs);
+    /** Everything a corpse saves; the per-version {@code CorpseData} turns it into NBT / ValueOutput. */
+    public CorpseState saveState() {
         NonNullList<ItemStack> items = NonNullList.withSize(CorpseLayout.SIZE, ItemStack.EMPTY);
         for (int i = 0; i < CorpseLayout.SIZE; i++) items.set(i, inventory.getItem(i));
-        Mc.saveItems(tag, items, level());
+        Map<Integer, CurioRef> refs = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < curioCount; i++) {
+            if (curioRefs[i] != null) refs.put(i, curioRefs[i]);
+        }
+        return new CorpseState(getOwnerId(), getOwnerName(), getSkinValue(), getSkinSignature(), deathGameTime,
+                CorpseLayout.VERSION, curioCount, otherCount, refs, items);
     }
 
-    @Override
-    protected void readAdditionalSaveData(CompoundTag tag) {
-        if (tag.hasUUID("Owner")) entityData.set(OWNER_ID, Optional.of(tag.getUUID("Owner")));
-        entityData.set(OWNER_NAME, tag.getString("OwnerName"));
-        entityData.set(SKIN_VALUE, tag.getString("SkinValue"));
-        entityData.set(SKIN_SIGNATURE, tag.getString("SkinSignature"));
-        deathGameTime = tag.contains("DeathTime") ? tag.getLong("DeathTime") : level().getGameTime();
+    public void loadState(CorpseState state) {
+        entityData.set(OWNER_ID, state.owner().map(UUID::toString).orElse(""));
+        entityData.set(OWNER_NAME, state.ownerName());
+        entityData.set(SKIN_VALUE, state.skinValue());
+        entityData.set(SKIN_SIGNATURE, state.skinSignature());
+        deathGameTime = state.deathTime() != null ? state.deathTime() : level().getGameTime();
         inventory.clearContent();
         java.util.Arrays.fill(curioRefs, null);
-        if (tag.getInt("Layout") >= CorpseLayout.VERSION) {
-            NonNullList<ItemStack> items = NonNullList.withSize(CorpseLayout.SIZE, ItemStack.EMPTY);
-            Mc.loadItems(tag, items, level());
-            for (int i = 0; i < CorpseLayout.SIZE; i++) inventory.setItem(i, items.get(i));
-            curioCount = Math.min(tag.getInt("CurioCount"), CorpseLayout.EXTRA_COUNT);
-            otherCount = Math.min(tag.getInt("OtherCount"), CorpseLayout.EXTRA_COUNT - curioCount);
-            ListTag refs = tag.getList("Curios", Tag.TAG_COMPOUND);
-            for (int i = 0; i < refs.size(); i++) {
-                CompoundTag ref = refs.getCompound(i);
-                int slot = ref.getInt("Slot");
-                if (slot >= 0 && slot < curioCount) curioRefs[slot] = CurioRef.load(ref);
-            }
+        if (state.layout() >= CorpseLayout.VERSION) {
+            for (int i = 0; i < CorpseLayout.SIZE && i < state.items().size(); i++) inventory.setItem(i, state.items().get(i));
+            curioCount = Math.min(state.curioCount(), CorpseLayout.EXTRA_COUNT);
+            otherCount = Math.min(state.otherCount(), CorpseLayout.EXTRA_COUNT - curioCount);
+            state.curioRefs().forEach((slot, ref) -> {
+                if (slot >= 0 && slot < curioCount) curioRefs[slot] = ref;
+            });
         } else {
-            loadLegacy(tag);
+            loadLegacy(state.items());
         }
     }
 
     /** Corpses saved by 1.0.0 used a 54-slot chest layout with extras mixed in. */
-    private void loadLegacy(CompoundTag tag) {
-        NonNullList<ItemStack> old = NonNullList.withSize(54, ItemStack.EMPTY);
-        Mc.loadItems(tag, old, level());
+    private void loadLegacy(List<ItemStack> old) {
         List<ItemStack> others = new ArrayList<>();
         for (int i = 0; i < old.size(); i++) {
             ItemStack stack = old.get(i);

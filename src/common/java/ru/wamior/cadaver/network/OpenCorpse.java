@@ -4,6 +4,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import ru.wamior.cadaver.entity.CorpseEntity;
+import ru.wamior.cadaver.version.Ids;
 import ru.wamior.cadaver.version.Mc;
 
 /**
@@ -12,7 +13,7 @@ import ru.wamior.cadaver.version.Mc;
  * Must run on the server thread.
  */
 public final class OpenCorpse {
-    public static final ResourceLocation ID = Mc.id("open_corpse");
+    public static final ResourceLocation ID = Ids.id("open_corpse");
 
     public static void handle(ServerPlayer player, int entityId, boolean quickLoot) {
         if (player == null || player.isSpectator() || !player.isAlive()) return;

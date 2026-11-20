@@ -1,25 +1,78 @@
 plugins {
-    id 'dev.architectury.loom' version '1.11.458' apply false
+    // obfuscated Minecraft (up to 1.21.11): remaps from Mojang names to the runtime names
+    id 'dev.architectury.loom' version '1.17.493' apply false
+    // unobfuscated Minecraft (26.1+): no mappings, no remapJar, the plain jar is the release jar
+    id 'dev.architectury.loom-no-remap' version '1.17.493' apply false
 }
 
-// Every target is an Architectury Loom project; `loom.platform` in targets/<name>/gradle.properties
-// picks Fabric, Forge or NeoForge. All targets use official Mojang mappings, so the shared code
-// is written once against Mojang names.
-subprojects {
-    apply plugin: 'java'
-    apply plugin: 'dev.architectury.loom'
+// ------------------------------------------------------------------------------------------------
+// Version helpers
+// ------------------------------------------------------------------------------------------------
 
+/** Numeric comparison of Minecraft versions: "1.21.11" > "1.21.4", "26.1" > "1.21.11". */
+def compareVersions = { String a, String b ->
+    def x = a.tokenize('.').collect { it.isInteger() ? it as int : 0 }
+    def y = b.tokenize('.').collect { it.isInteger() ? it as int : 0 }
+    for (int i = 0; i < Math.max(x.size(), y.size()); i++) {
+        int c = (i < x.size() ? x[i] : 0) <=> (i < y.size() ? y[i] : 0)
+        if (c != 0) return c
+    }
+    return 0
+}
+
+/**
+ * Source folders are grouped by concern and by the Minecraft version they are needed from:
+ *   src/mc/<concern>/<since>/          shared by all loaders (e.g. src/mc/entity/1.21.2)
+ *   src/<loader>/<concern>/<since>/    one loader only     (e.g. src/fabric/core/1.20.5)
+ * For every concern a target takes the newest <since> folder that is not newer than its
+ * Minecraft version. `shim.<concern>=<since>|none` in a target's gradle.properties overrides that.
+ */
+def pickShims = { Project p, File base, String mc ->
+    if (!base.directory) return []
+    base.listFiles().findAll { it.directory }.sort { it.name }.collect { File concern ->
+        def forced = p.findProperty("shim.${concern.name}") as String
+        if (forced == 'none') return null
+        if (forced) return new File(concern, forced)
+        concern.listFiles().findAll { it.directory && compareVersions(it.name, mc) <= 0 }
+                .max { a, b -> compareVersions(a.name, b.name) }
+    }.findAll { it != null }
+}
+
+ext.compareVersions = compareVersions
+
+/** Renames applied to the sources of every target at or above `since` (see preprocessSources). */
+def sourceReplacements = [
+        [since: '1.21.11', pattern: /\bResourceLocation\b/, replacement: 'Identifier'],
+        [since: '1.21.11', pattern: /\bnet\.minecraft\.client\.model\.PlayerModel\b/, replacement: 'net.minecraft.client.model.player.PlayerModel'],
+        [since: '26.1', pattern: /\bnet\.minecraft\.client\.renderer\.state\.CameraRenderState\b/, replacement: 'net.minecraft.client.renderer.state.level.CameraRenderState'],
+        [since: '26.3', pattern: /\.mulPose\(Axis\./, replacement: '.rotate(Axis.'],
+        [since: '26.3', pattern: /\bsetInvulnerable\(/, replacement: 'setPermanentlyInvulnerable('],
+        [since: '26.3', pattern: /\bnet\.neoforged\.fml\.VersionChecker\b/, replacement: 'net.neoforged.neoforge.common.VersionChecker'],
+]
+
+// Every target is an Architectury Loom project; `loom.platform` in targets/<name>/gradle.properties
+// picks Fabric, Forge or NeoForge. All targets are compiled against Mojang names (official mappings,
+// or no mappings at all from 26.1 on, where Minecraft ships unobfuscated).
+subprojects {
     def mc = project.property('minecraft_version') as String
     def loader = project.property('loader') as String
     def target = "${loader}-${mc}"
     def javaRelease = project.property('java_release') as int
+    // every Minecraft version this jar supports, oldest first (the build version is one of them)
+    def mcVersions = ((project.findProperty('mc_versions') ?: mc) as String).split(',')*.trim()
+    def unobfuscated = compareVersions(mc, '26.1') >= 0
+    /** Mod dependency configuration: remapped (modX) on obfuscated versions, plain (x) from 26.1 on. */
+    def mod = { String name -> unobfuscated ? name.substring(3, 4).toLowerCase() + name.substring(4) : name }
+
+    apply plugin: 'java'
+    apply plugin: unobfuscated ? 'dev.architectury.loom-no-remap' : 'dev.architectury.loom'
 
     group = mod_group_id
     version = "${mod_version}+${mc}-${loader}"
     base { archivesName = mod_id }
 
     java {
-        toolchain.languageVersion = JavaLanguageVersion.of(21)
+        toolchain.languageVersion = JavaLanguageVersion.of(javaRelease >= 25 ? 25 : 21)
         sourceCompatibility = JavaVersion.toVersion(javaRelease)
         targetCompatibility = JavaVersion.toVersion(javaRelease)
     }
@@ -28,27 +81,42 @@ subprojects {
         options.release = javaRelease
     }
 
+    def shims = pickShims(project, rootProject.file('src/mc'), mc) + pickShims(project, rootProject.file("src/${loader}"), mc)
+    ext.shimFolders = shims.collect { rootProject.projectDir.toPath().relativize(it.toPath()).toString().replace('\\', '/') }
+    def javaDirs = [rootProject.file('src/common/java')] + shims.collect { new File(it, 'java') }
     sourceSets {
         main {
-            java.srcDirs = [
-                    rootProject.file('src/common/java'),
-                    rootProject.file("src/mc-${mc}/java"),
-                    rootProject.file("src/${target}/java")
-            ]
-            resources.srcDirs = [
-                    rootProject.file('src/common/resources'),
-                    rootProject.file("src/${target}/resources")
-            ]
+            java.srcDirs = javaDirs
+            resources.srcDirs = [rootProject.file('src/common/resources')] + shims.collect { new File(it, 'resources') }
         }
     }
 
-    loom {
-        silentMojangMappingsLicense()
-        if (loader == 'fabric') {
-            mixin {
-                defaultRefmapName = 'cadaver.refmap.json'
-            }
+    // Plain renames Mojang made without changing behaviour are applied as text replacements on a
+    // copy of the sources, so one source file keeps working across them (line numbers stay the same).
+    def replacements = sourceReplacements.findAll { compareVersions(mc, it.since) >= 0 }
+    if (!replacements.isEmpty()) {
+        def generated = layout.buildDirectory.dir('preprocessed/java')
+        def preprocess = tasks.register('preprocessSources', Sync) {
+            from(javaDirs.findAll { it.exists() })
+            into(generated)
+            duplicatesStrategy = DuplicatesStrategy.FAIL
+            inputs.property('replacements', replacements.collect { "${it.pattern}=>${it.replacement}" })
+            filter { String line -> replacements.inject(line) { String l, r -> l.replaceAll(r.pattern, r.replacement) } }
         }
+        sourceSets.main.java.srcDirs = [generated]
+        tasks.named('compileJava') { dependsOn preprocess }
+    }
+    tasks.register('printShims') {
+        group = 'help'
+        description = 'Lists the source folders this target compiles.'
+        def folders = shimFolders
+        doLast { folders.each { println it } }
+    }
+
+    loom {
+        // No mixin refmap: Loom rewrites the mixin target names directly in the classes when it
+        // remaps the jar (checked: the Fabric jars reference method_16080 etc.), and 26.1+ needs none.
+        if (!unobfuscated) silentMojangMappingsLicense()
     }
 
     repositories {
@@ -56,28 +124,33 @@ subprojects {
         maven { name = 'NeoForged'; url = 'https://maven.neoforged.net/releases/' }
         maven { name = 'MinecraftForge'; url = 'https://maven.minecraftforge.net/' }
         maven { name = 'Curios'; url = 'https://maven.theillusivec4.top/' }
-        maven { name = 'TerraformersMC (Trinkets)'; url = 'https://maven.terraformersmc.com/releases/' }
     }
 
     dependencies {
         minecraft "com.mojang:minecraft:${mc}"
-        mappings loom.officialMojangMappings()
+        if (!unobfuscated) mappings loom.officialMojangMappings()
 
         if (loader == 'neoforge') {
             neoForge "net.neoforged:neoforge:${project.neoforge_version}"
             // optional at runtime: only touched through compat.AccessoryCompat when Curios is installed
-            modCompileOnly "top.theillusivec4.curios:curios-neoforge:${project.curios_version}"
+            if (project.findProperty('curios_version')) {
+                add(mod('modCompileOnly'), "top.theillusivec4.curios:curios-neoforge:${project.curios_version}")
+            }
         } else if (loader == 'forge') {
             forge "net.minecraftforge:forge:${project.forge_version}"
-            modCompileOnly "top.theillusivec4.curios:curios-forge:${project.curios_version}"
+            if (project.findProperty('curios_version')) {
+                add(mod('modCompileOnly'), "top.theillusivec4.curios:curios-forge:${project.curios_version}")
+            }
         } else {
-            modImplementation "net.fabricmc:fabric-loader:${project.fabric_loader_version}"
-            modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+            add(mod('modImplementation'), "net.fabricmc:fabric-loader:${project.fabric_loader_version}")
+            add(mod('modImplementation'), "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}")
             // Trinkets is reached by reflection (compat.Accessories), so it is not a compile dependency
         }
     }
 
     processResources {
+        def first = mcVersions.first()
+        def last = mcVersions.last()
         def props = [
                 mod_id                 : mod_id,
                 mod_name               : mod_name,
@@ -89,13 +162,16 @@ subprojects {
                 mod_sources            : mod_sources,
                 update_json_url        : update_json_url,
                 minecraft_version      : mc,
-                pack_format            : project.property('pack_format'),
-                minecraft_version_range: project.findProperty('minecraft_version_range') ?: '',
-                fabric_minecraft_range : project.findProperty('fabric_minecraft_range') ?: '',
+                pack_format            : project.findProperty('pack_format') ?: '',
+                // mods.toml (Maven range) and fabric.mod.json (semver range) built from mc_versions
+                // Maven ranges can't have identical bounds ("[1.20.2,1.20.2]" fails to load), "[1.20.2]" is exact
+                minecraft_version_range: first == last ? "[${first}]" : "[${first},${last}]",
+                fabric_minecraft_range : first == last ? first : ">=${first} <=${last}",
                 fabric_loader_version  : project.findProperty('fabric_loader_version') ?: '',
                 neoforge_version_range : project.findProperty('neoforge_version_range') ?: '',
                 forge_version_range    : project.findProperty('forge_version_range') ?: '',
                 loader_version_range   : project.findProperty('loader_version_range') ?: '',
+                curios_version_range   : project.findProperty('curios_version_range') ?: '[1,)',
                 java_release           : javaRelease,
         ]
         inputs.properties props
@@ -112,15 +188,17 @@ subprojects {
         }
     }
 
-    // remapJar writes the release jar to build/remapped; `releaseJar` puts it into build/libs.
+    // The release jar is first written to build/remapped (remapJar, or the plain "-dev" jar from 26.1
+    // on, where nothing is remapped); `releaseJar` puts it into the root build/libs/<mod>/<mc>/.
     // A local Gradle init script copies the output of every `Jar`-type task (Loom's remapJar is not
-    // one) into the developer's test instance. So only `local_copy_target` gets a Jar-type
-    // releaseJar (an identical repack, picked up by that script); the other targets use a plain
-    // Copy, so a full build doesn't fill the test instance with jars for other loaders.
-    def remapJar = tasks.named('remapJar') {
+    // one, "-dev" jars are skipped) into the developer's test instance. So only `local_copy_target`
+    // gets a Jar-type releaseJar (an identical repack, picked up by that script); the other targets
+    // use a plain Copy, so a full build doesn't fill the test instance with jars for other loaders.
+    def remapJar = tasks.named(unobfuscated ? 'jar' : 'remapJar') {
         destinationDirectory = layout.buildDirectory.dir('remapped')
     }
     def remapped = remapJar.flatMap { it.archiveFile }
+    def releaseDirectory = rootProject.layout.buildDirectory.dir("libs/${mod_version}/${mc}")
     def releaseJar
     if (target == project.property('local_copy_target')) {
         releaseJar = tasks.register('releaseJar', Jar) {
@@ -131,28 +209,33 @@ subprojects {
             manifest {
                 from({ zipTree(remapped.get().asFile).matching { include 'META-INF/MANIFEST.MF' }.singleFile })
             }
-            archiveFileName = remapped.map { it.asFile.name }
-            destinationDirectory = layout.buildDirectory.dir('libs')
+            archiveFileName = remapped.map { it.asFile.name.replace('-dev.jar', '.jar') }
+            destinationDirectory = releaseDirectory
         }
     } else {
         releaseJar = tasks.register('releaseJar', Copy) {
             from(remapped)
-            into(layout.buildDirectory.dir('libs'))
+            into(releaseDirectory)
+            rename { it.replace('-dev.jar', '.jar') }
         }
     }
     tasks.named('assemble') { dependsOn releaseJar }
 }
 
-// `gradlew buildAll` builds every target and gathers the release jars in build/libs/<version>/
-tasks.register('buildAll', Copy) {
+// Each target writes its own release jar to build/libs/<mod version>/<Minecraft version>/.
+// The same layout is used for a single-target build and for buildAll.
+tasks.register('buildAll') {
     group = 'build'
-    description = 'Builds all loader / Minecraft version targets and collects their jars.'
+    description = 'Builds all targets into build/libs/<mod version>/<Minecraft version>/.'
     subprojects.each { p -> dependsOn("${p.path}:build") }
-    subprojects.each { p ->
-        from(p.layout.buildDirectory.dir('libs')) {
-            include "${mod_id}-${mod_version}+*.jar"
-            exclude '*-dev.jar', '*-dev-shadow.jar', '*-sources.jar'
-        }
+}
+
+// Machine-readable list of targets for the release script: "<project> <loader> <mc> <mc_versions>"
+tasks.register('printTargets') {
+    group = 'help'
+    description = 'Lists every target with the Minecraft versions its jar supports.'
+    def rows = subprojects.collect { p ->
+        "${p.name} ${p.property('loader')} ${p.property('minecraft_version')} ${p.findProperty('mc_versions') ?: p.property('minecraft_version')}"
     }
-    into(layout.buildDirectory.dir("libs/${mod_version}"))
+    doLast { rows.each { println it } }
 }

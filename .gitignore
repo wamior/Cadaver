@@ -15,3 +15,11 @@ bin
 .classpath
 .project
 *.launch
+
+# Local store descriptions and publishing receipts (never credentials in Git)
+/docs/
+/.publish/
+__pycache__/
+*.pyc
+.env
+.env.*

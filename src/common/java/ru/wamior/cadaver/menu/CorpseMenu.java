@@ -1,13 +1,10 @@
 package ru.wamior.cadaver.menu;
 
-import com.mojang.datafixers.util.Pair;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.Container;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
-import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import ru.wamior.cadaver.platform.Platform;
@@ -18,13 +15,6 @@ import ru.wamior.cadaver.entity.CorpseLayout;
  * Corpse slots are take-only, so a corpse can't be used as free storage.
  */
 public class CorpseMenu extends AbstractContainerMenu {
-    private static final ResourceLocation[] ARMOR_ICONS = {
-            InventoryMenu.EMPTY_ARMOR_SLOT_HELMET,
-            InventoryMenu.EMPTY_ARMOR_SLOT_CHESTPLATE,
-            InventoryMenu.EMPTY_ARMOR_SLOT_LEGGINGS,
-            InventoryMenu.EMPTY_ARMOR_SLOT_BOOTS
-    };
-
     private final Container corpse;
     private final CorpseGuiLayout layout;
     private final int corpseSlotCount;
@@ -44,9 +34,9 @@ public class CorpseMenu extends AbstractContainerMenu {
         this.layout = new CorpseGuiLayout(curios, others);
 
         for (int i = 0; i < CorpseLayout.ARMOR_COUNT; i++) {
-            addSlot(new LootSlot(corpse, CorpseLayout.ARMOR + i, CorpseGuiLayout.ARMOR_X + i * 18, CorpseGuiLayout.ARMOR_Y, ARMOR_ICONS[i]));
+            addSlot(new LootSlot(corpse, CorpseLayout.ARMOR + i, CorpseGuiLayout.ARMOR_X + i * 18, CorpseGuiLayout.ARMOR_Y, LootSlot.armorIcon(i)));
         }
-        addSlot(new LootSlot(corpse, CorpseLayout.OFFHAND, CorpseGuiLayout.OFFHAND_X, CorpseGuiLayout.ARMOR_Y, InventoryMenu.EMPTY_ARMOR_SLOT_SHIELD));
+        addSlot(new LootSlot(corpse, CorpseLayout.OFFHAND, CorpseGuiLayout.OFFHAND_X, CorpseGuiLayout.ARMOR_Y, LootSlot.offhandIcon()));
         for (int row = 0; row < 3; row++) {
             for (int col = 0; col < 9; col++) {
                 addSlot(new LootSlot(corpse, CorpseLayout.MAIN + row * 9 + col, 8 + col * 18, CorpseGuiLayout.MAIN_Y + row * 18, null));
@@ -101,24 +91,5 @@ public class CorpseMenu extends AbstractContainerMenu {
     public void removed(Player player) {
         super.removed(player);
         corpse.stopOpen(player);
-    }
-
-    private static final class LootSlot extends Slot {
-        private final ResourceLocation emptyIcon;
-
-        LootSlot(Container container, int index, int x, int y, ResourceLocation emptyIcon) {
-            super(container, index, x, y);
-            this.emptyIcon = emptyIcon;
-        }
-
-        @Override
-        public boolean mayPlace(ItemStack stack) {
-            return false;
-        }
-
-        @Override
-        public Pair<ResourceLocation, ResourceLocation> getNoItemIcon() {
-            return emptyIcon == null ? null : Pair.of(InventoryMenu.BLOCK_ATLAS, emptyIcon);
-        }
     }
 }
